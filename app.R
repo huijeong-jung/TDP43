@@ -12,7 +12,6 @@ library(gridExtra)
 crExon_geneID <- read.csv('CrypticExon_geneID.csv')
 cellTypes = c('Astr', 'Endo', 'GABA', 'Glut', 'Micr', 'OPCs', 'Olig', 'Peri')
 
-
 # metadata contains information regarding patients that provided the samples
 metadata <- read.table('metadata.txt', sep='\t', header=TRUE)
 
@@ -45,7 +44,7 @@ tardbp_dwm <- read.csv('tardbp_dwm.csv', row.names=1)
 grn_tc <- read.csv('grn_tc.csv', row.names=1)
 grn_dwm <- read.csv('grn_dwm.csv', row.names= 1)
 
-# putting all the read counts into a list format for easy plotting 
+# putting all the read counts into a list format for easy plotting for temporal cortex data
 reads_tc_list <- list()
 geneNames_tc <- c()
 for (i in 1:nrow(tc_df)) {
@@ -54,7 +53,6 @@ for (i in 1:nrow(tc_df)) {
   # loop through all the columns, plot case vs control. braak stage. 
   reads_tc <- matrix(ncol=7)
   colnames(reads_tc) <- c('pid', 'Group', 'Proportion', 'Diagnosis', 'cellType', 'countE', 'countG')
-  
   crEx <- rownames(tc_df)[i]
   geneID <- substr(crEx, 1, 15)
   geneName <- crExon_geneID[crExon_geneID$ensembleID== geneID, ]$Genes[1]
@@ -63,6 +61,7 @@ for (i in 1:nrow(tc_df)) {
     countE <- as.numeric(cr[j])
     colname <- colnames(tc_df)[j]
     pid <- substr(colname, 1, 5)
+    # categorizing according to braak stage
     if (pid %in% group1) {
       groupt <- '0-1'
     }
@@ -72,7 +71,7 @@ for (i in 1:nrow(tc_df)) {
     else {
       groupt <- '5-6'
     }
-    
+    # categorizing according to diagnosis 
     if (pid %in% AD) {
       diagnosis <- 'Case'
     }
@@ -115,6 +114,7 @@ for (i in 1:nrow(tc_df)) {
 colnames(geneNames_tc) <- c('Gene Name', 'Occurrences')
 rownames(geneNames_tc) <- NULL
 
+# putting all the read counts into a list format for easy plotting for deep white matter data
 reads_dwm_list <- list()
 geneNames_dwm <- c()
 for (i in 1:nrow(dwm_df)) {
@@ -276,7 +276,7 @@ for (i in 1:length(reads_dwm_list)) {
     xlab('Patient Diagnosis') + stat_pvalue_manual(corr3, label= 'p.adj') +
     ggtitle(paste0("Gene ", g, ' White Matter Proportion vs Diagnosis')) +
     theme(plot.title=element_text(size=10)) 
-
+  
   p_dwm_stage <- ggplot(data, aes(x=factor(Group, levels= c("0-1", "2-4", "5-6")), y= countG)) +
     geom_quasirandom(size=0.1) + geom_boxplot(alpha=0.1, col="black", width=0.25) +
     facet_wrap(~cellType, nrow=2) + theme_classic() +
@@ -284,7 +284,7 @@ for (i in 1:length(reads_dwm_list)) {
     stat_pvalue_manual(corr4, label= 'p.adj', step.group.by= 'cellType', step.increase= 0.15) +
     ggtitle(paste0('Gene ', g, ' White Matter Proportion vs Braak Stage')) +
     theme(plot.title= element_text(size=10)) 
-
+  
   dwm1[[g]] <- p_dwm
   dwm2[[g]] <- p_dwm_2
   dwm3[[g]] <- p_dwm_tardbp
@@ -439,16 +439,13 @@ rownames(geneNames_tc2) <- NULL
 reads_dwm_list <- reads_dwm_list[sortidx]
 reads_tc_list <- reads_tc_list[sortidx2]
 
-
-
-
+# r shiny code
 ui <- fluidPage(
   # App title ----
   titlePanel("Cryptic Exon Expression in Single Cells"),
   
   # Sidebar layout with input and output definitions ----
   sidebarLayout(
-    
     # Sidebar panel for inputs ----
     sidebarPanel(
       radioButtons("which_matter", "Brain Region",  
@@ -456,13 +453,9 @@ ui <- fluidPage(
                               "White Matter" = "part2")), 
       DT::dataTableOutput("mytable"), width= 3
     ),
-    
     # Main panel for displaying outputs ----
-    # probably don't need the all plots tab 
     mainPanel(
       uiOutput("myUIOutput"), 
-      # conditionalPanel(is.null(input$mytable_rows_selected) == TRUE, p("Generic message")),
-      # conditionalPanel(is.null(input$mytable_rows_selected) == FALSE, plotOutput("p1")),
       width= 9
     )
     
@@ -472,8 +465,6 @@ ui <- fluidPage(
 
 # Define server logic required to draw a histogram ----
 server <- function(input, output) {
-  # tc_df <- data.frame(cbind(geneNames_tc, reads_tc_list))
-  
   # a reactive expression uses a widget input and returns a value 
   crExon_list_tc <- reactive({
     return(geneNames_tc2)
@@ -504,9 +495,6 @@ server <- function(input, output) {
       # use the variable gene to select for gene of interest
       # get the index of the selected gene, obtain the reads from reads_tc_list,
       # plot with ggplot
-      # todo: fix geneName,
-      # data <- reads_dwm_list[[idx]]
-      # if (nrow(data) != 0) {
       p_dwm <- dwm_final[idx, 1][[1]]
       p_dwm_2 <- dwm_final[idx, 2][[1]]
       p_dwm_tardbp <- dwm_final[idx, 3][[1]]
@@ -517,8 +505,6 @@ server <- function(input, output) {
       grid.arrange(p_dwm, p_dwm_2, p_dwm_diagnosis, p_dwm_stage, p_dwm_tardbp, p_dwm_grn, ncol=2)
     }
     else if (region=='part1') {
-      # data <- reads_tc_list[[idx]]
-      # if (nrow(data) != 0) {
       p_tc <- tc_final[idx, 1][[1]]
       p_tc_2 <- tc_final[idx, 2][[1]]
       p_tc_tardbp <- tc_final[idx, 3][[1]]
@@ -543,7 +529,6 @@ server <- function(input, output) {
       else {
         data <- reads_tc_list[[idx]]
       }
-      
       
       if (nrow(data) == 0) {
         p("No expression")
