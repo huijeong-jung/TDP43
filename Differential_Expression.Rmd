@@ -323,45 +323,6 @@ genes_braak <- lapply(celltypes,function(celltype){
 d_tmm_selected_braak <- d_tmm_all_genes %>% filter(Geneid %in% genes_braak)
 ```
 
-```{r}
-d_tmm_filtered <- d_tmm_selected_diagnosis %>% filter(cell_type== 'Astrocytes', tissue== 'Deep white matter') %>%
-  mutate(group= .[['diagnosis']]) %>% 
-  mutate(outcome= .[['Exon count']])
-
-temp <- acast(d_tmm_filtered, Geneid~ sample, value.var= 'outcome') %>% 
-  replace(is.na(.), 0) 
-# age, sex, pmi 
-# pmi is post mortem interval
-factor <- d_tmm_filtered %>% distinct(sample, group, age, sex, pmi, braak_group) %>%
-  arrange(., by_group= sample) 
-  
-y <- DGEList(counts= temp, group= factor$group) 
-y <- calcNormFactors(y)
-
-# Group <- factor(paste(factor$age, factor$sex, factor$pmi, factor$group, sep= "."))
-
-des <- model.matrix(~sex+age+pmi+group, data= factor)
-y_temp <- estimateDisp(y, design= des)
-qlfit <- glmQLFit(y_temp, design= des)
-
-# AD vs. Control 
-qlf1 <- glmQLFTest(qlfit, coef= 5)
-# AD vs. Dementia
-qlf2 <- glmQLFTest(qlfit, coef= 6)
-# Ctrl vs. Dementia 
-qlf3 <- glmQLFTest(qlfit, contrast= c(0, 0, 0, 0, -1, 1))
-
-# comparisons <- list("Ctrl-AD"= c(5), "Dementia-AD"= c(6), "Dementia-Ctrl"= c(0, 0, 0, 0, -1, 1))
-# 
-# 
-# coefs <- matrix(nrow=3) 
-# coefs[1, ] <- 5
-# coefs[2, ] <- 6
-# coefs[3, ] <-  c(0, 0, 0, 0, -1, 1)
-
-
-```
-
 
 
 ```{r}
@@ -446,7 +407,7 @@ results_braak <- lapply(celltypes,function(celltype){
 # reformatting the results to be loaded into r shiny app 
 
 ```{r}
-comparisons <- c('groupAD-groupCtrl', 'groupAD-groupDementia', 'groupCtrl-groupDementia')
+comparisons <- c('Control-AD', 'Dementia-AD', 'Control-Dementia')
 diffExp_results_diagnosis  <- list()
 for (t in 1:length(tissues)) {
   temp <- c()
@@ -462,15 +423,17 @@ for (t in 1:length(tissues)) {
         mutate(., cellType= celltypes[c], tissue= tissues[t]) %>% 
         filter(., symbol != 'n/a' ) %>% 
         mutate(., comparison= comparisons[comp])
-       temp <- rbind(temp, crExons_selected)
+        
+      temp <- rbind(temp, crExons_selected)
     }
+    
     diffExp_results_diagnosis[[tissues[t]]] <- temp
   }}
 ```
 
 
 ```{r}
-comparisons <- c("group0_1-group2_4", "group0_1-group5_6", "group2_4-group5_6")
+comparisons <- c("0_1-2_4", "0_1-5_6", "2_4-5_6")
 diffExp_results_braak <- list()
 for (t in 1:length(tissues)) {
   temp <- c()
@@ -486,18 +449,44 @@ for (t in 1:length(tissues)) {
         mutate(., cellType= celltypes[c], tissue= tissues[t]) %>% 
         filter(., symbol != 'n/a' ) %>% 
         mutate(., comparison= comparisons[comp])
-       temp <- rbind(temp, crExons_selected)
+      temp <- rbind(temp, crExons_selected) 
     }
+    
     diffExp_results_braak[[tissues[t]]] <- temp
   }}
 ```
 
+# changing format to match stat_pvalue_manual table format 
+```{r}
+diffExp_results_diagnosis[[1]] <- diffExp_results_diagnosis[[1]] %>% 
+  mutate(group1= sapply(diffExp_results_diagnosis[[1]]$comparison, function(comp) strsplit(comp, "-") %>% unlist() %>% .[1]), 
+         group2= sapply(diffExp_results_diagnosis[[1]]$comparison, function(comp) strsplit(comp, "-") %>% unlist() %>% .[2])) 
+
+diffExp_results_diagnosis[[2]] <- diffExp_results_diagnosis[[2]] %>% 
+  mutate(group1= sapply(diffExp_results_diagnosis[[2]]$comparison, function(comp) strsplit(comp, "-") %>% unlist() %>% .[1]), 
+         group2= sapply(diffExp_results_diagnosis[[2]]$comparison, function(comp) strsplit(comp, "-") %>% unlist() %>% .[2]))
+
+diffExp_results_braak[[1]] <- diffExp_results_braak[[1]] %>% 
+  mutate(group1= sapply(diffExp_results_braak[[1]]$comparison, function(comp) strsplit(comp, "-") %>% unlist() %>% .[1]), 
+         group2= sapply(diffExp_results_braak[[1]]$comparison, function(comp) strsplit(comp, "-") %>% unlist() %>% .[2])) %>%
+  mutate(group1 = str_replace(group1,"-",pattern= "_"), 
+         group2 = str_replace(group2,"-",pattern= "_"))
+
+diffExp_results_braak[[2]] <- diffExp_results_braak[[1]] %>% 
+  mutate(group1= sapply(diffExp_results_braak[[2]]$comparison, function(comp) strsplit(comp, "-") %>% unlist() %>% .[1]), 
+         group2= sapply(diffExp_results_braak[[2]]$comparison, function(comp) strsplit(comp, "-") %>% unlist() %>% .[2])) %>% 
+    mutate(group1 = str_replace(group1,"-",pattern= "_"), 
+         group2 = str_replace(group2,"-",pattern= "_"))
+
+```
+
+
 # Write the resulting p-values and FDR in corresponding csv files 
 ```{r}
-# write_csv(diffExp_results_braak$`Deep white matter`, "DE_dwm_braak.csv")
-# write_csv(diffExp_results_braak$`Temporal cortex`, "DE_tc_braak.csv")
-# write_csv(diffExp_results_diagnosis$`Deep white matter`, "DE_dwm_diagnosis.csv")
-# write_csv(diffExp_results_diagnosis$`Temporal cortex`, "DE_tc_diagnosis.csv")
+write_csv(diffExp_results_braak$`Deep white matter`, "DE_dwm_braak.csv")
+write_csv(diffExp_results_braak$`Temporal cortex`, "DE_tc_braak.csv")
+write_csv(diffExp_results_diagnosis$`Deep white matter`, "DE_dwm_diagnosis.csv")
+write_csv(diffExp_results_diagnosis$`Temporal cortex`, "DE_tc_diagnosis.csv")
 ```
 
 
