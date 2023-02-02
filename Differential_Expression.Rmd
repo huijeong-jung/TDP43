@@ -1,0 +1,507 @@
+---
+title: "Differential_Expression"
+output: html_document
+---
+
+# Libraries
+
+```{r,message=FALSE}
+library(tidyverse)
+library(ggpubr)
+library(edgeR)
+library(broom)
+library(parallel)
+library(patchwork)
+library(tidyr)
+library(reshape2)
+#RhpcBLASctl::blas_set_num_threads(1) #For Roche clusters, parallel processing
+```
+
+# Read raw reads
+
+```{r}
+d <- read_csv('data/Raw_FeatureCounts_sepCrypticExons.csv') %>% 
+  dplyr::rename(Geneid=geneID)
+colnames(d) <- gsub('_combined_custom_out.txt','',colnames(d))
+```
+
+```{r}
+cryptic_exons <- filter(d, grepl('_c',Geneid)) %>% pull(Geneid)
+genes_with_cryptic_exons <- filter(d,Geneid %in% (cryptic_exons %>% gsub('_c','',.))) %>% pull(Geneid)
+```
+
+```{r}
+genes2keep <- c(cryptic_exons,genes_with_cryptic_exons,'ENSG00000120948','ENSG00000030582')
+```
+
+Read gene symbol
+
+```{r}
+gene_dict <- read_csv('data/CrypticExon_geneID.csv') %>% 
+  dplyr::select(symbol=Genes,Geneid=ensembleID) %>% 
+  unique() %>% 
+  filter(!is.na(symbol),
+         !is.na(Geneid))
+```
+
+## don't need to run code in section below, results loaded from csv ## 
+
+# Read number of cells per sample/celltype
+
+```{r}
+n_cells <- read.table('data/n_cells.txt') %>%
+  filter(V2!='total') %>%
+  mutate(V2=gsub('.txt','',V2)) %>%
+  setNames(c('n_cells','sample_celltype')) %>%
+  mutate(sample_celltype=gsub('.txt','',sample_celltype)) %>%
+  separate(sample_celltype,into=c('sample','cell_type'),sep='\\.') %>%
+  as_tibble()
+```
+
+# Get size factors
+
+```{r}
+celltypes = c('Astrocytes', 'Endothelial', 'GABAergic', 'Glutamatergic', 'Microglia', 'OPCs', 'Oligodendrocytes', 'Pericytes')
+```
+
+```{r}
+size_factors <- function(celltype){
+  m <- d %>% dplyr::select(Geneid,contains(celltype)) %>% as.data.frame() 
+  
+  sizefactors <- m %>% 
+    column_to_rownames('Geneid') %>% 
+    DGEList(.) %>% 
+    calcNormFactors(.) %>% 
+    effectiveLibSizes(.)
+  
+  out <- tibble(sample=gsub('\\..+','',colnames(m)[-1]),
+                sizefactor=sizefactors) %>% 
+         mutate(cell_type=celltype)
+}
+```
+
+```{r}
+d_size_factors <- mclapply(celltypes,size_factors,mc.cores=4) %>% #parallel processing on 4 cores
+  bind_rows()
+```
+
+# Get Raw counts
+
+# Raw counts for genes with corresponding cryptic exons
+```{r}
+d_raw <- d %>% 
+  filter(Geneid%in%genes2keep) %>% #Only keep genes with a cryptic exon,GRN and TARDBP
+  gather(sample,counts,-Geneid) %>%
+  separate(sample,into=c('sample','cell_type'),sep='\\.') %>%
+  as_tibble() %>% 
+  mutate(type=ifelse(grepl('_c',Geneid),'Cryptic count','Exon count')) %>% 
+  mutate(Geneid=gsub('_c','',Geneid)) %>%
+  spread(type,counts) %>% 
+  mutate(`Cryptic count`=ifelse(is.na(`Cryptic count`),0,`Cryptic count`)) %>% 
+  mutate(`Total count`=`Cryptic count`+`Exon count`) %>% 
+  left_join(.,d_size_factors,by=c('sample','cell_type'))
+```
+
+# Raw counts for all genes 
+# run only once, otherwise read in from csv file 
+```{r}
+# d_raw_all_genes <- d %>% 
+#   filter(., !grepl('_c', Geneid)) %>% 
+#   gather(sample,counts,-Geneid)  %>% 
+#   separate(sample,into=c('sample','cell_type'),sep='\\.') %>% 
+#   as_tibble() %>% 
+#   left_join(., d_size_factors, by=c('sample', 'cell_type'))
+```
+
+# WRITE raw counts
+```{r}
+# write_csv(d_raw_all_genes,'Raw_all_genes.csv')
+```
+
+# READ raw counts
+```{r}
+d_raw_all_genes <- read_csv('Raw_all_genes.csv') %>%
+  dplyr::rename(., 'Exon count'= 'counts')
+```
+
+# TMM normalize
+```{r}
+tmm_normalize <- function(celltype){
+  d %>% dplyr::select(Geneid,contains(celltype)) %>% 
+    as.data.frame() %>% 
+    column_to_rownames('Geneid') %>% 
+    DGEList(.) %>% 
+    calcNormFactors(.) %>% 
+    cpm(.,log=FALSE) %>% 
+    as.data.frame()
+}
+```
+
+```{r}
+d_tmm <- mclapply(celltypes,tmm_normalize,mc.cores=4) %>% #Runs on 4 cores
+  bind_cols() %>% 
+  rownames_to_column('Geneid') %>% 
+  filter(Geneid%in%genes2keep) %>% #Only keep genes with a cryptic exon,GRN and TARDBP
+  gather(sample,cpm,-Geneid) %>% 
+  separate(sample,into=c('sample','cell_type'),sep='\\.') %>% 
+  as_tibble()
+```
+
+Format data and compute proportion of cpm that are coming from a cryptic exon
+
+```{r}
+d_tmm <- d_tmm %>% 
+  mutate(type=ifelse(grepl('_c',Geneid),'Cryptic cpm','Exon cpm')) %>% 
+  mutate(Geneid=gsub('_c','',Geneid)) %>% 
+  spread(type,cpm) %>% 
+  mutate(`Cryptic cpm`=ifelse(is.na(`Cryptic cpm`),0,`Cryptic cpm`)) %>% 
+  mutate(`Total cpm`=`Cryptic cpm`+`Exon cpm`) %>% 
+  mutate(prop=`Cryptic cpm`/`Total cpm`)
+```
+
+# TMM normalization for all genes 
+# run only once, load from csv
+```{r}
+# temp <- mclapply(celltypes, tmm_normalize, mc.cores = 4) %>% 
+#   bind_cols()
+# temp2 <- temp %>% 
+#   rownames_to_column('Geneid') %>% 
+#   gather(sample,cpm,-Geneid) %>% 
+#   separate(sample,into=c('sample','cell_type'),sep='\\.')
+# d_tmm_all_genes <- temp2 %>% as_tibble()
+```
+
+# WRITE normalized counts for all genes
+```{r}
+# write_csv(d_tmm_all_genes, 'TMM_normalized_all_genes.csv')
+```
+
+# READ TMM normalized counts for all genes
+```{r}
+d_tmm_all_genes <- read_csv('TMM_normalized_all_genes.csv') %>%
+  dplyr::rename(., 'Exon cpm'= 'cpm')
+```
+
+# Add raw counts + libsize
+
+```{r}
+d_tmm <- inner_join(d_raw,d_tmm,by=c('Geneid','sample','cell_type'))
+```
+
+```{r}
+d_tmm_all_genes <- inner_join(d_raw_all_genes, d_tmm_all_genes, by=c('Geneid', 'sample', 'cell_type'))
+```
+
+Add metadata
+
+```{r}
+meta <- read_csv('data/metadata.roche.csv') %>% 
+  dplyr::select(-individual_id) %>% 
+  dplyr::rename(sample=sample_id) %>% 
+  mutate(braak_group=factor(case_when(
+    braak_stage %in% c(0,1) ~ '0-1',
+    braak_stage %in% c(2,3,4) ~ '2-4',
+    braak_stage %in% c(5,6) ~ '5-6'
+  ),levels=c('0-1','2-4','5-6'))) %>%
+  mutate(diagnosis=factor(diagnosis,levels=c('Ctrl','Dementia','AD')))
+```
+
+```{r}
+d_tmm <- d_tmm %>% 
+  left_join(.,meta,by='sample') %>% 
+  left_join(.,gene_dict,by='Geneid') %>% 
+  left_join(.,n_cells,by=c('sample','cell_type')) %>% 
+  mutate(symbol=ifelse(Geneid=='ENSG00000030582','GRN',symbol)) %>% 
+  mutate(symbol=ifelse(Geneid=='ENSG00000120948','TARDBP',symbol)) %>% 
+  mutate(symbol=ifelse(Geneid=='ENSG00000168137','SETD5',symbol)) %>% 
+  dplyr::select(symbol,everything()) 
+```
+
+```{r}
+d_tmm_all_genes <- d_tmm_all_genes %>% 
+  left_join(., meta, by='sample')  %>% 
+  left_join(., n_cells, by= c('sample', 'cell_type')) 
+
+```
+
+Add GRN and TARDBP
+
+```{r}
+TARDBP_exp <- d_tmm %>% 
+  filter(symbol=='TARDBP') %>% 
+  dplyr::select(sample,cell_type,`TARDBP cpm`=`Exon cpm`)
+```
+
+```{r}
+GRN_exp <- d_tmm %>% 
+  filter(symbol=='GRN') %>% 
+  dplyr::select(sample,cell_type,`GRN cpm`=`Exon cpm`)
+```
+
+```{r}
+TARDBP_GRN_exp <- left_join(TARDBP_exp,GRN_exp,by=c('sample','cell_type'))
+```
+
+# Write
+
+```{r}
+# d_tmm <- d_tmm %>% 
+#   filter(!symbol%in%c('GRN','TARBP')) %>% 
+#   left_join(.,TARDBP_GRN_exp,by=c('sample','cell_type')) %>% 
+#   dplyr::select(symbol:prop,`TARDBP cpm`,`GRN cpm`,n_cells,everything()) %>% 
+#   write_csv(.,'TMM_normalized.csv')
+```
+
+```{r}
+# write_csv(d_tmm_all_genes, 'TMM_normalized_all_genes3.csv')
+```
+
+## don't need to run code in section above, results loaded from csv ## 
+
+
+
+# READ
+```{r}
+#d_tmm <- read_csv('TMM_normalized.csv') %>% 
+#  mutate(braak_group=factor(braak_group,levels=c('0-1','2-4','5-6'))) %>% 
+#  mutate(diagnosis=factor(diagnosis,levels=c('Ctrl','Dementia','AD')))
+
+d_tmm_all_genes <- read_csv('data/TMM_normalized_all_genes3.csv')
+```
+
+# Conduct differential expression analysis for all genes over different cell types and tissue types 
+
+# initial comparison between different diagnoses 
+```{r}
+# list of tissues
+celltypes <- c('Astrocytes', 'Endothelial', 'GABAergic', 'Glutamatergic', 'Microglia', 'OPCs', 'Oligodendrocytes', 'Pericytes')
+tissues <- c('Deep white matter', 'Temporal cortex')
+
+# genes contains all the genes that are unfiltered by edgeR in all cell types and tissues 
+genes_diagnosis <- lapply(celltypes,function(celltype){
+  lapply(tissues, function(tissue_input) {
+      d_tmm_filtered <- d_tmm_all_genes %>% filter(cell_type== celltype, tissue== tissue_input)
+       
+      d_tmm_filtered$group <- d_tmm_filtered[['diagnosis']]
+      d_tmm_filtered$outcome <- d_tmm_filtered[['Exon count']]
+      temp <- acast(d_tmm_filtered, Geneid~sample, value.var= 'outcome') %>%
+        replace(is.na(.), 0)
+      factor <- d_tmm_filtered %>% distinct(sample, group, age, sex, pmi, braak_group) %>%
+        arrange(., by_group= sample) 
+      
+      y <- DGEList(counts= temp, group = factor$group) 
+      y <- calcNormFactors(y)
+      # filtering the genes that show no expression 
+      t <- edgeR::filterByExpr(y) 
+      names(t)[t]
+      })
+  }) %>% unlist() %>% unlist() %>% unique()
+
+# filtering through all the genes to include only the distinct genes from previous step 
+d_tmm_selected_diagnosis <- d_tmm_all_genes %>% filter(Geneid %in% genes_diagnosis)
+
+
+genes_braak <- lapply(celltypes,function(celltype){
+  lapply(tissues, function(tissue_input) {
+      d_tmm_filtered <- d_tmm_all_genes %>% filter(cell_type== celltype, tissue== tissue_input)
+       
+      d_tmm_filtered$group <- d_tmm_filtered[['braak_group']]
+      d_tmm_filtered$outcome <- d_tmm_filtered[['Exon count']]
+      temp <- acast(d_tmm_filtered, Geneid~sample, value.var= 'outcome') %>%
+        replace(is.na(.), 0)
+      factor <- d_tmm_filtered %>% distinct(sample, group, age, sex, pmi, braak_group) %>%
+        arrange(., by_group= sample) 
+      
+      y <- DGEList(counts= temp, group = factor$group) 
+      y <- calcNormFactors(y)
+      # filtering the genes that show no expression 
+      t <- edgeR::filterByExpr(y) 
+      names(t)[t]
+      })
+  }) %>% unlist() %>% unlist() %>% unique()
+
+d_tmm_selected_braak <- d_tmm_all_genes %>% filter(Geneid %in% genes_braak)
+```
+
+```{r}
+d_tmm_filtered <- d_tmm_selected_diagnosis %>% filter(cell_type== 'Astrocytes', tissue== 'Deep white matter') %>%
+  mutate(group= .[['diagnosis']]) %>% 
+  mutate(outcome= .[['Exon count']])
+
+temp <- acast(d_tmm_filtered, Geneid~ sample, value.var= 'outcome') %>% 
+  replace(is.na(.), 0) 
+# age, sex, pmi 
+# pmi is post mortem interval
+factor <- d_tmm_filtered %>% distinct(sample, group, age, sex, pmi, braak_group) %>%
+  arrange(., by_group= sample) 
+  
+y <- DGEList(counts= temp, group= factor$group) 
+y <- calcNormFactors(y)
+
+# Group <- factor(paste(factor$age, factor$sex, factor$pmi, factor$group, sep= "."))
+
+des <- model.matrix(~sex+age+pmi+group, data= factor)
+y_temp <- estimateDisp(y, design= des)
+qlfit <- glmQLFit(y_temp, design= des)
+
+# AD vs. Control 
+qlf1 <- glmQLFTest(qlfit, coef= 5)
+# AD vs. Dementia
+qlf2 <- glmQLFTest(qlfit, coef= 6)
+# Ctrl vs. Dementia 
+qlf3 <- glmQLFTest(qlfit, contrast= c(0, 0, 0, 0, -1, 1))
+
+# comparisons <- list("Ctrl-AD"= c(5), "Dementia-AD"= c(6), "Dementia-Ctrl"= c(0, 0, 0, 0, -1, 1))
+# 
+# 
+# coefs <- matrix(nrow=3) 
+# coefs[1, ] <- 5
+# coefs[2, ] <- 6
+# coefs[3, ] <-  c(0, 0, 0, 0, -1, 1)
+
+
+```
+
+
+
+```{r}
+# contains all differential expression analysis results from cell types and tissues 
+# differential expression analysis is done with raw exon counts 
+
+results_diagnosis <- lapply(celltypes,function(celltype){
+  lapply(tissues, function(tissue_input) {
+      d_tmm_filtered <- d_tmm_selected_diagnosis %>% filter(cell_type== celltype, tissue== tissue_input)
+      d_tmm_filtered$group <- d_tmm_filtered[['diagnosis']]
+      d_tmm_filtered$outcome <- d_tmm_filtered[['Exon count']]
+      
+      temp <- acast(d_tmm_filtered, Geneid~sample, value.var= 'outcome') %>%
+        replace(is.na(.), 0)
+      factor <- d_tmm_filtered %>% distinct(sample, group, age, sex, pmi, braak_group) %>%
+        arrange(., by_group= sample) 
+      
+      y <- DGEList(counts= temp, group= factor$group) 
+      y <- calcNormFactors(y)
+      
+      des <- model.matrix(~sex+age+pmi+group, data= factor) 
+      
+      y_temp <- estimateDisp(y, design= des)
+      qlfit <- glmQLFit(y_temp, design= des)
+
+      # AD vs. Control 
+      qlf1 <- glmQLFTest(qlfit, coef= 5)
+      # AD vs. Dementia
+      qlf2 <- glmQLFTest(qlfit, coef= 6)
+      # Ctrl vs. Dementia 
+      qlf3 <- glmQLFTest(qlfit, contrast= c(0, 0, 0, 0, -1, 1))
+    
+      list("AD-Control"= topTags(qlf1, n = Inf, sort.by = "none")$table,
+           "AD-Dementia"= topTags(qlf2, n = Inf, sort.by = "none")$table, 
+           "Control-Dementia"= topTags(qlf3, n = Inf, sort.by = "none")$table)
+
+  })
+})
+
+```
+
+
+
+# secondary comparison between braak_groups
+```{r}
+# renaming braak_group categorization from 0-1 to 0_1 due to issues with contrast matrix creation 
+d_tmm_selected_braak <- d_tmm_selected_braak %>% mutate(., braak_group = str_replace(braak_group,"_",pattern= "-"))
+
+results_braak <- lapply(celltypes,function(celltype){
+  lapply(tissues, function(tissue_input) {
+      d_tmm_filtered <- d_tmm_selected_braak %>% filter(cell_type== celltype, tissue== tissue_input)
+      d_tmm_filtered$group <- d_tmm_filtered[['braak_group']]
+      d_tmm_filtered$outcome <- d_tmm_filtered[['Exon count']]
+      
+      temp <- acast(d_tmm_filtered, Geneid~sample, value.var= 'outcome') %>%
+        replace(is.na(.), 0)
+      factor <- d_tmm_filtered %>% distinct(sample, group, age, sex, pmi, braak_group) %>%
+        arrange(., by_group= sample)
+      
+      y <- DGEList(counts= temp, group= factor$group) 
+      y <- calcNormFactors(y)
+      
+      des <- model.matrix(~sex+age+pmi+group, data= factor) 
+      y_temp <- estimateDisp(y, design= des)
+      qlfit <- glmQLFit(y_temp, design= des)
+      
+      # group 0-1 vs 2-4
+      qlf1 <- glmQLFTest(qlfit, coef= 5)
+      # group 0-1 vs 5-6
+      qlf2 <- glmQLFTest(qlfit, coef= 6)
+      # group 2-4 vs 5-6
+      qlf3 <- glmQLFTest(qlfit, contrast= c(0, 0, 0, 0, -1, 1))
+      
+      list("grp0_1-grp2_4"= topTags(qlf1, n = Inf, sort.by = "none")$table,
+           "grp0_1-grp5_6"= topTags(qlf2, n = Inf, sort.by = "none")$table, 
+           "grp2_4-grp5_6"= topTags(qlf3, n = Inf, sort.by = "none")$table)
+      
+  })
+})
+```
+
+# reformatting the results to be loaded into r shiny app 
+
+```{r}
+comparisons <- c('groupAD-groupCtrl', 'groupAD-groupDementia', 'groupCtrl-groupDementia')
+diffExp_results_diagnosis  <- list()
+for (t in 1:length(tissues)) {
+  temp <- c()
+  for (c in 1:length(celltypes)) {
+    for (comp in 1:length(comparisons)) {
+      totalResults <- results_diagnosis[[c]][[t]][[comp]]
+      crExons <- rownames(totalResults) %in% genes_with_cryptic_exons
+      crExons_selected <- totalResults[crExons, ] %>% rownames_to_column() %>%
+        rename(Geneid= 'rowname')
+      # if the p-values are n/a, they were initially filtered out by edgeR 
+      # as they showed no raw expression  
+      crExons_selected <- left_join(gene_dict, crExons_selected, by= 'Geneid') %>%
+        mutate(., cellType= celltypes[c], tissue= tissues[t]) %>% 
+        filter(., symbol != 'n/a' ) %>% 
+        mutate(., comparison= comparisons[comp])
+       temp <- rbind(temp, crExons_selected)
+    }
+    diffExp_results_diagnosis[[tissues[t]]] <- temp
+  }}
+```
+
+
+```{r}
+comparisons <- c("group0_1-group2_4", "group0_1-group5_6", "group2_4-group5_6")
+diffExp_results_braak <- list()
+for (t in 1:length(tissues)) {
+  temp <- c()
+  for (c in 1:length(celltypes)) {
+    for (comp in 1:length(comparisons)) {
+      totalResults <- results_braak[[c]][[t]][[comp]]
+      crExons <- rownames(totalResults) %in% genes_with_cryptic_exons
+      crExons_selected <- totalResults[crExons, ] %>% rownames_to_column() %>%
+        rename(Geneid= 'rowname')
+      # if the p-values are n/a, they were initially filtered out by edgeR 
+      # as they showed no raw expression  
+      crExons_selected <- left_join(gene_dict, crExons_selected, by= 'Geneid') %>%
+        mutate(., cellType= celltypes[c], tissue= tissues[t]) %>% 
+        filter(., symbol != 'n/a' ) %>% 
+        mutate(., comparison= comparisons[comp])
+       temp <- rbind(temp, crExons_selected)
+    }
+    diffExp_results_braak[[tissues[t]]] <- temp
+  }}
+```
+
+# Write the resulting p-values and FDR in corresponding csv files 
+```{r}
+# write_csv(diffExp_results_braak$`Deep white matter`, "DE_dwm_braak.csv")
+# write_csv(diffExp_results_braak$`Temporal cortex`, "DE_tc_braak.csv")
+# write_csv(diffExp_results_diagnosis$`Deep white matter`, "DE_dwm_diagnosis.csv")
+# write_csv(diffExp_results_diagnosis$`Temporal cortex`, "DE_tc_diagnosis.csv")
+```
+
+
+
+
+
+
