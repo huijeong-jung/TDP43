@@ -225,7 +225,7 @@ for (i in 1:length(reads_dwm_list)) {
   data3 <- data %>% group_by(cellType) %>% top_n(1, countG) %>%
     slice_max(countG, with_ties= FALSE) %>%
     select(cellType, "y.position"= countG) %>% as.data.frame() 
-    
+  
   # load the corrected p values
   # corr1 and 2 is between the proportions 
   corr1 <- read.csv(paste0("dwm_fig1", g, ".csv")) %>%
@@ -239,11 +239,11 @@ for (i in 1:length(reads_dwm_list)) {
   corr3 <- diffexp_dwm_diag %>% filter(symbol == g) %>% 
     mutate(p.adj = signif(FDR, digits= 2)) %>% 
     merge(data3, by= "cellType", all= TRUE) 
-    
+  
   corr4 <- diffexp_dwm_braak %>% filter(symbol == g) %>% 
     mutate(p.adj = signif(FDR, digits= 2)) %>% 
     merge(data3, by= "cellType", all= TRUE)
-
+  
   pval1 <- corr1[is.finite(corr1$p.adj),'p.adj'] %>% min() %>% as.character()
   
   # cells can only be specific for the first two plots
@@ -306,8 +306,8 @@ for (i in 1:length(reads_dwm_list)) {
   cells <- sort(unique(celldata))
   max_countG <- max(data$countG[is.finite(data$countG)])
   
-
-
+  
+  
   dwm1[[g]] <- p_dwm
   dwm2[[g]] <- p_dwm_2
   dwm3[[g]] <- p_dwm_tardbp
@@ -365,18 +365,21 @@ for (j in 1:length(reads_tc_list)) {
   
   # load the corrected p values
   corr1 <- read.csv(paste0("tc_fig1", g, ".csv")) %>%
-    as.data.frame() %>% merge(data2, by= "cellType", all= TRUE)
+    as.data.frame() %>% merge(data2, by= "cellType", all= TRUE) %>% 
+    mutate(p.adj = signif(p.adj, digits=2))
   corr2 <- read.csv(paste0("tc_fig2", g, ".csv")) %>% as.data.frame() %>%
-    merge(data2, by= "cellType", all= TRUE)
-  corr3 <- read.csv(paste0("tc_fig3", g, ".csv")) %>% as.data.frame() %>%
-    merge(data3, by= "cellType", all=TRUE)
-  corr4 <- read.csv(paste0("tc_fig4", g, ".csv")) %>% as.data.frame() %>%
-    merge(data3, by= "cellType", all=TRUE)
+    merge(data2, by= "cellType", all= TRUE) %>% 
+    mutate(p.adj = signif(p.adj, digits= 2))
+  # corr3 and 4 is between the raw gene counts 
+  corr3 <- diffexp_tc_diag %>% filter(symbol == g) %>% 
+    mutate(p.adj = signif(FDR, digits= 2)) %>% 
+    merge(data3, by= "cellType", all= TRUE) 
   
-  corr1$p.adj <- signif(corr1$p.adj, digits= 2)
-  corr2$p.adj <- signif(corr2$p.adj, digits= 2)
-  corr3$p.adj <- signif(corr3$p.adj, digits= 2)
-  corr4$p.adj <- signif(corr4$p.adj, digits= 2)
+  corr4 <- diffexp_tc_braak %>% filter(symbol == g) %>% 
+    mutate(p.adj = signif(FDR, digits= 2)) %>% 
+    merge(data3, by= "cellType", all= TRUE)
+
+
   pval2 <- corr1[is.finite(corr1$p.adj),'p.adj'] %>% min()
   
   celldata <- data[data$Proportion != 0, ]$cellType
@@ -399,6 +402,23 @@ for (j in 1:length(reads_tc_list)) {
     ggtitle(paste0('Gene ', g, ' Grey Matter Proportion vs Braak Stage')) +
     theme(plot.title =element_text(size=10)) + scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
   
+  p_tc_diagnosis <- ggplot(data, aes(x=factor(Diagnosis, levels= c("Control", "Dementia", "AD")), y=countG, fill= cellType)) +
+    geom_quasirandom(size=0.1) +
+    geom_boxplot(alpha=0.1, col= 'black', width=0.25) +
+    facet_wrap(~cellType, nrow=2) + theme_classic() +
+    ylab('Counts Per Million') + xlab('Patient Diagnosis') + 
+    stat_pvalue_manual(corr3, label= 'p.adj', step.group.by= 'cellType', step.increase= 0.15) +
+    ggtitle(paste0('Gene ', g, ' Grey Matter Proportion vs Diagnosis')) +
+    theme(plot.title =element_text(size=10)) + scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+  
+  p_tc_stage <- ggplot(data, aes(x=factor(Group, levels=c("0-1", "2-4", "5-6")), y=countG, fill= cellType)) +
+    geom_quasirandom(size=0.1) + geom_boxplot(alpha=0.1, col="black", width=0.25) +
+    facet_wrap(~cellType, nrow=2) + theme_classic() +
+    ylab('Counts Per Million') + xlab("Patient Braak Stage") +
+    stat_pvalue_manual(corr4, label= 'p.adj', step.group.by= 'cellType', step.increase= 0.15) +
+    ggtitle(paste0('Gene ', g, ' Grey Matter Proportion vs Braak Stage')) +
+    theme(plot.title =element_text(size=10)) + scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+  
   p_tc_tardbp <- ggplot(data, aes(x= TARDBP, y= Proportion)) + geom_point(aes(colour=Diagnosis)) + 
     facet_wrap(~cellType, nrow=2) + geom_smooth(color = "blue", method= 'lm') +
     theme_classic() + ylab('Proportion of Counts') + xlab('TMM Normalized TARDBP count (log10)') + 
@@ -418,22 +438,7 @@ for (j in 1:length(reads_tc_list)) {
   cells <- sort(unique(celldata))
   max_countG <- max(data$countG[is.finite(data$countG)])
   
-  p_tc_diagnosis <- ggplot(data, aes(x=factor(Diagnosis, levels= c("Control", "Case")), y=countG, fill= cellType)) +
-    geom_quasirandom(size=0.1) +
-    geom_boxplot(alpha=0.1, col= 'black', width=0.25) +
-    facet_wrap(~cellType, nrow=2) + theme_classic() +
-    ylab('Counts Per Million') +
-    xlab('Patient Diagnosis') + stat_pvalue_manual(corr3, label= 'p.adj') +
-    ggtitle(paste0('Gene ', g, ' Grey Matter Proportion vs Diagnosis')) +
-    theme(plot.title =element_text(size=10)) + scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
-  
-  p_tc_stage <- ggplot(data, aes(x=factor(Group, levels=c("0-1", "2-4", "5-6")), y=countG, fill= cellType)) +
-    geom_quasirandom(size=0.1) + geom_boxplot(alpha=0.1, col="black", width=0.25) +
-    facet_wrap(~cellType, nrow=2) + theme_classic() +
-    ylab('Counts Per Million') + xlab("Patient Braak Stage") +
-    stat_pvalue_manual(corr4, label= 'p.adj', step.group.by= 'cellType', step.increase= 0.15) +
-    ggtitle(paste0('Gene ', g, ' Grey Matter Proportion vs Braak Stage')) +
-    theme(plot.title =element_text(size=10)) + scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+
   
   tc1[[g]] <- p_tc
   tc2[[g]] <- p_tc_2
@@ -567,5 +572,4 @@ server <- function(input, output) {
 }
 
 shinyApp(ui= ui, server=server)
-
 
