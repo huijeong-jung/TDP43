@@ -14,5 +14,4 @@ and visualize normalized cryptic exon read counts on an R shiny. The R packages 
 quantification and the summarized results are 
 deployed on the shinyapps server https://huijeong-jung.shinyapps.io/app-2/
 
-
-# TODO : INCLUDE FILE FOR JUST CRYPTIC EXON 
+- Differential_Expression.Rmd: This file was used to analyze the raw quantification of cryptic exon expression levels to compute the normalized cryptic exon propportion and to observe which were differentially expressed between different sample groups. 
