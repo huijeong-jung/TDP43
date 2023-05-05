@@ -343,17 +343,17 @@ results_diagnosis <- lapply(celltypes,function(celltype){
       y <- DGEList(counts= temp, group= factor$group) 
       y <- calcNormFactors(y)
       
-      des <- model.matrix(~sex+age+pmi+group, data= factor) 
+      des <- model.matrix(~0+group+sex+age+pmi, data= factor) 
       
       y_temp <- estimateDisp(y, design= des)
       qlfit <- glmQLFit(y_temp, design= des)
 
       # AD vs. Control 
-      qlf1 <- glmQLFTest(qlfit, coef= 5)
+      qlf1 <- glmQLFTest(qlfit, contrast= c(1, -1, 0, 0, 0, 0))
       # AD vs. Dementia
-      qlf2 <- glmQLFTest(qlfit, coef= 6)
+      qlf2 <- glmQLFTest(qlfit, contrast= c(1, 0, -1, 0, 0, 0))
       # Ctrl vs. Dementia 
-      qlf3 <- glmQLFTest(qlfit, contrast= c(0, 0, 0, 0, -1, 1))
+      qlf3 <- glmQLFTest(qlfit, contrast= c(0, 1, -1, 0, 0, 0))
     
       list("AD-Control"= topTags(qlf1, n = Inf, sort.by = "none")$table,
            "AD-Dementia"= topTags(qlf2, n = Inf, sort.by = "none")$table, 
@@ -385,16 +385,16 @@ results_braak <- lapply(celltypes,function(celltype){
       y <- DGEList(counts= temp, group= factor$group) 
       y <- calcNormFactors(y)
       
-      des <- model.matrix(~sex+age+pmi+group, data= factor) 
+      des <- model.matrix(~0+group+sex+age+pmi, data= factor) 
       y_temp <- estimateDisp(y, design= des)
       qlfit <- glmQLFit(y_temp, design= des)
       
       # group 0-1 vs 2-4
-      qlf1 <- glmQLFTest(qlfit, coef= 5)
+      qlf1 <- glmQLFTest(qlfit, contrast = c(-1, 1, 0, 0, 0, 0))
       # group 0-1 vs 5-6
-      qlf2 <- glmQLFTest(qlfit, coef= 6)
+      qlf2 <- glmQLFTest(qlfit, contrast = c(-1, 0, 1, 0, 0, 0))
       # group 2-4 vs 5-6
-      qlf3 <- glmQLFTest(qlfit, contrast= c(0, 0, 0, 0, -1, 1))
+      qlf3 <- glmQLFTest(qlfit, contrast = c(0, -1, 1, 0, 0, 0))
       
       list("grp0_1-grp2_4"= topTags(qlf1, n = Inf, sort.by = "none")$table,
            "grp0_1-grp5_6"= topTags(qlf2, n = Inf, sort.by = "none")$table, 
@@ -488,9 +488,5 @@ write_csv(diffExp_results_braak$`Temporal cortex`, "DE_tc_braak.csv")
 write_csv(diffExp_results_diagnosis$`Deep white matter`, "DE_dwm_diagnosis.csv")
 write_csv(diffExp_results_diagnosis$`Temporal cortex`, "DE_tc_diagnosis.csv")
 ```
-
-
-
-
 
 
